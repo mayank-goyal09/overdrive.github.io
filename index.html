@@ -721,9 +721,14 @@
         </div>
       </div>
 
-      <button id="btn-start-game" class="btn-gamer">
-        <span>IGNITION // START ENGINE</span>
-      </button>
+      <div style="display: flex; gap: 10px; width: 100%;">
+        <button id="btn-start-game" class="btn-gamer" style="flex: 1;">
+          <span>IGNITION // START ENGINE</span>
+        </button>
+        <button id="btn-restart-game" class="btn-hud hidden" style="padding: 0 20px; font-weight: 800; border-radius: 12px; font-size: 13px; background: rgba(255, 68, 68, 0.15); border: 1px solid #ff4444; color: #ff6666;" title="Restart Run From Start Line">
+          🔄 RESTART
+        </button>
+      </div>
     </div>
   </div>
 
@@ -1885,14 +1890,17 @@
 
     togglePause() {
       const menu = document.getElementById('menu-screen');
+      const btnRestart = document.getElementById('btn-restart-game');
       if (this.gameState === 'playing') {
         this.gameState = 'paused';
         menu.classList.remove('hidden');
         document.getElementById('btn-start-game').querySelector('span').innerText = 'RESUME OVERDRIVE';
+        if (btnRestart) btnRestart.classList.remove('hidden');
         this.loadRecords();
       } else if (this.gameState === 'paused') {
         this.gameState = 'playing';
         menu.classList.add('hidden');
+        if (btnRestart) btnRestart.classList.add('hidden');
       }
     }
 
@@ -1916,8 +1924,33 @@
       document.getElementById('btn-start-game').addEventListener('click', () => {
         this.sound.init();
         document.getElementById('menu-screen').classList.add('hidden');
+        const btnRestart = document.getElementById('btn-restart-game');
+        if (btnRestart) btnRestart.classList.add('hidden');
         this.gameState = 'playing';
       });
+
+      const btnRestart = document.getElementById('btn-restart-game');
+      if (btnRestart) {
+        btnRestart.addEventListener('click', () => {
+          this.score = 0;
+          this.speed = 0;
+          this.comboMultiplier = 1.0;
+          this.nitro = 100;
+          this.chrono = 100;
+          this.steerAngle = 0;
+          this.driftAngle = 0;
+          this.isAirborne = false;
+          this.airVelocityY = 0;
+          this.car.position.set(0, 0, 0);
+          this.car.rotation.set(0, 0, 0);
+          this.buildTrack();
+          document.getElementById('menu-screen').classList.add('hidden');
+          btnRestart.classList.add('hidden');
+          document.getElementById('btn-start-game').querySelector('span').innerText = 'IGNITION // START ENGINE';
+          this.gameState = 'playing';
+          this.triggerBanner('RACE RESTARTED');
+        });
+      }
 
       document.getElementById('btn-pause').addEventListener('click', () => this.togglePause());
       document.getElementById('btn-cam').addEventListener('click', () => this.cycleCamera());
@@ -1930,8 +1963,12 @@
           carCards.forEach(c => c.classList.remove('active'));
           card.classList.add('active');
           this.activeCarType = card.dataset.car;
-          this.scene.remove(this.car);
+          const prevPos = this.car ? this.car.position.clone() : new THREE.Vector3(0, 0, 0);
+          const prevRot = this.car ? this.car.rotation.clone() : new THREE.Euler(0, 0, 0);
+          if (this.car) this.scene.remove(this.car);
           this.car = createCarMesh(this.activeCarType);
+          this.car.position.copy(prevPos);
+          this.car.rotation.copy(prevRot);
           this.scene.add(this.car);
         });
       });
@@ -1942,6 +1979,9 @@
           modeCards.forEach(c => c.classList.remove('active'));
           card.classList.add('active');
           this.gameMode = card.dataset.mode;
+          this.car.position.set(0, 0, 0);
+          this.car.rotation.set(0, 0, 0);
+          this.speed = 0;
           this.buildTrack();
         });
       });
@@ -2156,6 +2196,22 @@
         const poolSize = this.trackChunks.length;
         const totalSpan = poolSize * chunkLen;
 
+        // Auto-heal / Re-align chunks if car is ever outside the chunk pool span
+        let minChunkZ = Infinity;
+        let maxChunkZ = -Infinity;
+        for (let i = 0; i < poolSize; i++) {
+          const cz = this.trackChunks[i].position.z;
+          if (cz < minChunkZ) minChunkZ = cz;
+          if (cz > maxChunkZ) maxChunkZ = cz;
+        }
+
+        if (this.car.position.z < minChunkZ - 20 || this.car.position.z > maxChunkZ + 120) {
+          const baseZ = Math.floor((this.car.position.z - 60) / chunkLen) * chunkLen;
+          this.trackChunks.sort((a, b) => a.position.z - b.position.z).forEach((chunk, idx) => {
+            chunk.position.z = baseZ + idx * chunkLen;
+          });
+        }
+
         this.trackChunks.forEach(chunk => {
           // If chunk is completely behind the car, leap forward to the front
           if (chunk.position.z + chunkLen < this.car.position.z - 40) {
@@ -2194,8 +2250,8 @@
       this.trafficDrones.forEach(drone => {
         drone.mesh.position.z += drone.speed * dt;
 
-        // If drone is far behind the car, recycle ahead into random lane
-        if (drone.mesh.position.z < carPos.z - 45) {
+        // If drone is far behind the car OR way too far ahead (e.g. from teleport/car swap), recycle ahead
+        if (drone.mesh.position.z < carPos.z - 45 || drone.mesh.position.z > carPos.z + 700) {
           drone.mesh.position.z = carPos.z + 240 + Math.random() * 200;
           drone.lane = lanes[Math.floor(Math.random() * lanes.length)];
           drone.mesh.position.x = drone.lane;
